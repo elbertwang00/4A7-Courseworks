@@ -11,17 +11,18 @@ class Aircraft:
         self.a_sl = 340.3
 
         # Current flight condition values
-        self.h = 0.0 # Altitude
+        self.h = -1
         self.s = 0.0 # Air distance travelled
-        self.T = self.T_sl
-        self.T0 = self.T
-        self.p = self.p_sl
-        self.p0 = self.p
-        self.rho = self.rho_sl
-        self.rho0 = self.rho
-        self.a = self.a_sl
+        self.T = -1
+        self.T0 = -1
+        self.p = -1
+        self.p0 = -1
+        self.rho = -1
+        self.rho0 = -1
+        self.a = -1
 
         self.V = -1
+        self.M = -1
         self.Cl = -1
         self.beta = -1
         self.EAS = -1
@@ -35,6 +36,8 @@ class Aircraft:
         self.W_F = specs['W_F']
         self.W_FB = 0.0 # Weight of fuel burnt
         self.W = self.W_E + self.W_P + self.W_F
+        self.WOrig = self.W
+        self.D = -1
 
         # Other aircraft specs
         self.maxPass = specs['maxPass']
@@ -70,7 +73,11 @@ class Aircraft:
         self.K1 = specs['K1'] # Parabolic drag model parameters
         self.K2 = specs['K2']
 
+        self.vRat = specs['vRat'] # EAS ratio (design point)
+
         self.betaOpt = 2*(self.K1*self.K2)**0.5
+
+        self.wingLoad = -1
 
     def checkVariables(self):
         if self.time == 0.0:
@@ -81,6 +88,8 @@ class Aircraft:
             assert self.rEngine <= 50
             assert self.effComp <= 0.92
             assert self.effTurb <= 0.92
+            assert self.effFan <= 0.94
+            assert self.FPREngine >= 1.35
 
             # Weight constraints
             assert self.W_F <= self.W_F_MP
@@ -89,6 +98,8 @@ class Aircraft:
 
         if self.W_F <= 0:
             raise Exception(f'Zero fuel remaining at air distance: {self.s}')
+        if self.M >= 0.85:
+            raise Exception(f'Mach number exceeding transonic drag threshold of 0.85')
         
         return
     
@@ -113,35 +124,39 @@ class Aircraft:
             self.rho = tropRat * 0.364
             self.a = (self.T/self.T_sl)**0.5 * 340.3
         return
+
+    def EASUpdate(self):
+        # Optimal equivalent air speed for given aricraft weight (slide 33)
+        self.EASOpt = (self.W/0.5/self.rho_sl/self.SWing)**0.5 * (self.K2/self.K1)**0.25
+        self.EAS = self.vRat * self.EASOpt
+        return
+    
+    def TASUpdate(self):
+        # Update true air speed (slide 33)
+        self.V = self.EAS / (self.rho/self.rho_sl)**0.5
+        return
+    
+    def MFlightUpdate(self):
+        # AIR Mach number from velocity and temperature
+        self.M = self.V / self.a
+        return
     
     def ClUpdate(self):
         self.Cl = 2*self.W / (self.rho * self.V**2 * self.SWing)
-        return
-
-    def EASUpdate(self, opt=False):
-        # Equivalent air speed (slide 33)
-        if opt==False:
-            self.EAS = self.V * (self.rho/self.rho_sl)**0.5
-        else:
-            self.EASOpt = (self.W/0.5/self.rho_sl/self.SWing)**0.5 * (self.K2/self.K1)**0.25
         return
     
     def DBetaUpdate(self):
         # Beta (1/(L/D)) and drag for given Cl using the parabolic drag model (slide 31)
 
-        self.beta = self.K1/self.Cl + self.K2*self.Cl
+        # self.beta = self.K1/self.Cl + self.K2*self.Cl
+        self.beta = 0.5*self.betaOpt*(self.vRat**2 + 1/self.vRat**2)
         
         self.D = self.W * self.beta
         return
-    
+
     #########################################################################################################################################################
     #                                                                   ENGINE
     #########################################################################################################################################################
-    
-    def MFlightUpdate(self):
-        # AIR Mach number from velocity and temperature
-        self.M = self.V / (1.4 * 0.287 * self.T)**0.5
-        return
     
     def stagnationValuesUpdate(self):
         # Calculate stagnation temperature, pressure and density for engine computations
@@ -166,6 +181,7 @@ class Aircraft:
 
         # Overall efficiency
         self.effOverall = self.effProp * self.effCycle * self.effTransfer
+
         return
     
     def rangeParamUpdate(self):
@@ -182,82 +198,85 @@ class Aircraft:
         if self.time == 0.0:
             W_FBTimestep = 0.015 * self.W
         else:
-            W_FBTimestep = self.W * (1 - np.exp(sTimestep/self.H))
+            W_FBTimestep = self.WOrig * (1-np.exp(-sTimestep/self.H))
 
         self.W_F -= W_FBTimestep
         self.W -= W_FBTimestep
         self.W_FB += W_FBTimestep
+
         return
     
     #########################################################################################################################################################
     #                                                                   SIMULATION
     #########################################################################################################################################################
 
-    def updateAllFlightValues(self):
+    def updateAllFlightValues(self, h, ft=True):
+        # Update altitude before everything else
+        if ft == True:
+            self.h = 0.0003048*h
+        else:
+            self.h = h
+
+        self.checkVariables()
+
         # Aircraft
         self.ISACondUpdate()
-        self.
+        self.EASUpdate()
+        self.TASUpdate()
+        self.MFlightUpdate()
+        self.ClUpdate()
+        self.DBetaUpdate()
 
         # Engine
-        self.MFlightUpdate()
         self.stagnationValuesUpdate()
         self.engineEfficienciesUpdate()
         self.rangeParamUpdate()
+        self.sFuelburnUpdate()
 
         self.time += self.timestep
 
-
-
-
-    def betaFromV(self):
-        # Beta given aircraft weight and wing surface area (slide 34)
-        Bstar = self.DBetaUpdate()
-        Ve = self.EASFromV()
-        Vestar = self.EASFromV()
-        vRat = Ve/Vestar
-
-        self.beta = 0.5*Bstar*(vRat**2 + 1/vRat**2)
         return
 
 
 if __name__ == '__main__':
     
-    ## Plotting temperature, pressure, density and sonic speed ratios over different altitudes
-    # hRange = np.arange(0,20,0.01)
-
-    # TArray, pArray, rhoArray, aArray = np.zeros(len(hRange)), np.zeros(len(hRange)), np.zeros(len(hRange)), np.zeros(len(hRange))
-
-    # for i, h in enumerate(hRange):
-    #     TRat, pRat, rhoRat, aRat = aircraft.ISACond(h)
-
-    #     TArray[i], pArray[i], rhoArray[i], aArray[i] = TRat/288.15, pRat/101.325, rhoRat/1.225, aRat/340.3
-
-    # plt.plot(hRange, TArray)
-    # plt.plot(hRange, pArray)
-    # plt.plot(hRange, rhoArray)
-    # plt.plot(hRange, aArray)
-
-    # plt.show()
+    notesData = '-13.779527559055055, 2508.960573476652; 930.1181102362204, 9677.419354838668; 1860.236220472441, 17275.985663082407; 2321.850393700787, 21003.584229390646; 2790.354330708661, 24587.81362007164; 3727.36220472441, 32329.749103942624; 3861.712598425197, 33548.38709677418; 0, 7956.98924731178; 926.6732283464567, 15985.663082437255; 1853.3464566929133, 24157.706093189918; 2328.740157480315, 28458.78136200717; 2790.354330708661, 32616.4874551971; 3727.36220472441, 41290.32258064514; 4664.370078740157, 50179.21146953403; 5594.488188976376, 58996.415770609296; 6204.232283464566, 65089.605734767'
+    notesSFB, notesFB = zip(*[(float(datapoint.split(', ')[0]), float(datapoint.split(', ')[1])) for datapoint in notesData.split('; ')])
 
     timestep = 1 # s
 
     # Analysis variables
     vRat = 1 # Ratio of EAS to optimal EAS
-    initCruiseAlt = 9.449
+    initCruiseAlt = 35000
+    W_P = 40_000
+    W_F = 74_000
     
     # vCruise = 256
     # MCruise = 0.85
     # LDCruise = 21
 
-    aircraftSpecs = {'W_E':106_000, 'W_MP':40_000, 'W_MTO':220_000, 'W_P':40_000, 'W_F':74_000, # Weight specs
+    aircraftSpecs = {'W_E':106_000, 'W_MP':40_000, 'W_MTO':220_000, 'W_P':W_P, 'W_F':W_F, # Weight specs
                      'maxPass':240, 'MPRange':12_000, 'W_F_MP':74_000, 'SWing':315, # Other aircraft specs
-                     'rEgnine':45, 'thetEngine':6, 'effComp':0.9, 'effTurb':0.9, 'FPREngine':1.45, 'effFan':0.92, 'effTransfer':0.9, 'LCVFuel':2.83e6, # Engine
+                     'rEgnine':45, 'thetEngine':6, 'effComp':0.9, 'effTurb':0.9, 'FPREngine':1.45, 'effFan':0.92, 'effTransfer':0.9, 'LCVFuel':42.7e6, # Engine
                      'timestep':timestep, 'k':0.015, 'c1':0.3, 'c2':1.0, 'K1':0.0125, 'K2':0.0446, 'vRat':vRat} # Model parameters
     
 
     aircraft = Aircraft(aircraftSpecs)
 
+    altitudes = initCruiseAlt * np.ones(10)
 
-    # POINTS TO EXPLORE
-    # Check if H changes through timesteps - prevents analytical solutions for W_F required for each flight, etc.
+    distances = []
+    fuelBurn = []
     
+    W_F = 1
+    while W_F > 0:
+        aircraft.updateAllFlightValues(initCruiseAlt, ft=True)
+        distances.append(aircraft.s/1000)
+        fuelBurn.append(aircraft.W_FB)
+
+    plt.plot(distances, fuelBurn)
+    plt.scatter(notesSFB, notesFB)
+    plt.yticks(np.arange(0,max(fuelBurn),5000))
+    plt.grid()
+    plt.show()
+    print('lol')
