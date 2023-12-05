@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 class Aircraft:
@@ -35,10 +36,10 @@ class Aircraft:
         self.W_P = specs['W_P']
         self.W_F = specs['W_F']
         self.W_FB = 0.0 # Weight of fuel burnt
-        self.W = self.W_E + self.W_P + self.W_F
 
-        self.W = 220000
-        self.WOrig = self.W
+        self.W = self.W_E + self.W_P + self.W_F
+        self.W_TO = self.W
+
         self.D = -1
 
         # Other aircraft specs
@@ -64,6 +65,11 @@ class Aircraft:
         self.effCycle = -1
         self.effTransfer = specs['effTransfer']
         self.effOverall = -1
+
+        # Pollution parameters
+        self.W_FBTimestep = -1
+        self.W_CO2 = 0.0
+        self.W_NOX = 0.0
         
         # Model parameters
         self.timestep = specs['timestep']
@@ -92,7 +98,7 @@ class Aircraft:
             assert self.FPREngine >= 1.35
 
             # Weight constraints
-            assert self.W_F <= self.W_F_MP
+            # assert self.W_F <= self.W_F_MP
             assert self.W_P <= self.W_MP
             assert self.W <= self.W_MTO
 
@@ -129,7 +135,7 @@ class Aircraft:
 
     def speedsUpdate(self):
         # Optimal equivalent air speed for given aricraft weight (slide 33)
-        self.EASOpt = (self.W/0.5/self.rho_sl/self.SWing)**0.5 * (self.K2/self.K1)**0.25
+        self.EASOpt = (self.W*9.81/0.5/self.rho_sl/self.SWing)**0.5 * (self.K2/self.K1)**0.25
         self.EAS = self.vRat * self.EASOpt
 
         # Update true air speed (slide 33)
@@ -185,11 +191,11 @@ class Aircraft:
         # Calculate the overall engine efficiency given the current flight conditions (slide 39)
 
         # Cycle efficiency
-        gamRat = (1.4-1)/1.4
+        gamRat = 0.4/1.4
         self.effCycle = (self.thetEngine * self.effTurb * (1-1/self.rEngine**gamRat) - (self.rEngine**gamRat - 1)/self.effComp) / (self.thetEngine - 1 - (self.rEngine**gamRat - 1)/self.effComp)
         
         # Propulsion efficiency``
-        Mjet = 5*((self.FPREngine * self.p0/self.p)**gamRat - 1)
+        Mjet = (5*((self.FPREngine * self.p0/self.p)**gamRat - 1))**0.5
         TjRat = (1 + 0.2*self.M**2) / (1 + 0.2*Mjet**2) * self.FPREngine**(gamRat/self.effFan)
         self.effProp = 2 / (1 + Mjet * TjRat**0.5 / self.M)
 
@@ -206,18 +212,28 @@ class Aircraft:
         # Calculate the distance travelled this timestep using the speed
         # Calculate the change in fuel weight during this timestep and update all aircraft weights acoordingly
 
-        sTimestep = self.V * self.timestep
-        self.s += sTimestep
-
         if self.time == 0.0:
-            W_FBTimestep = 0.015 * self.W
+            self.W_FBTimestep = 0.015 * self.W_TO
         else:
-            W_FBTimestep = self.W * (1-np.exp(-sTimestep/self.H))
+            sTimestep = self.V * self.timestep
+            self.s += sTimestep
+            self.W_FBTimestep = self.W * (1-np.exp(-sTimestep/self.H))
 
-        self.W_F -= W_FBTimestep
-        self.W -= W_FBTimestep
-        self.W_FB += W_FBTimestep
-        self.W_FB2 = self.WOrig * (1-np.exp(-self.s/self.H))
+        self.W_F -= self.W_FBTimestep
+        self.W -= self.W_FBTimestep
+        self.W_FB += self.W_FBTimestep
+        return
+    
+    def pollutionUpdate(self):
+        # NOX emissions
+        T03 = 1 + (self.rEngine**(0.4/1.4) - 1)/self.effComp
+        EI_NOX = 0.011445 * np.exp(0.00676593 * T03) * self.T0
+        self.W_NOX += EI_NOX * self.W_FBTimestep * (15.1*2)
+
+        # CO2 emissions
+        self.W_CO2 += 3088 * self.W_FBTimestep
+
+        # Water vapour - contrails
 
         return
     
@@ -239,6 +255,9 @@ class Aircraft:
         # Aircraft
         self.ISACondUpdate()
 
+        # if self.time == 0.0:
+        self.sFuelburnUpdate()
+
         if MOvrd!=-1 or VOvrd!=-1:
             self.speedsOvrd(VOvrd, MOvrd)
         else:
@@ -251,10 +270,9 @@ class Aircraft:
         self.stagnationValuesUpdate()
         self.engineEfficienciesUpdate()
         self.rangeParamUpdate()
-        self.sFuelburnUpdate()
+        self.pollutionUpdate()
 
         self.time += self.timestep
-
         return
 
 
@@ -266,14 +284,10 @@ if __name__ == '__main__':
     timestep = 1 # s
 
     # Analysis variables
-    vRat = 3.2 # Ratio of EAS to optimal EAS
+    vRat = 1.016 # Ratio of EAS to optimal EAS
     initCruiseAlt = 9.5
-    W_P = 40_000
-    W_F = 74_000
-    
-    # vCruise = 256
-    # MCruise = 0.85
-    # LDCruise = 21
+    W_P = 24_000
+    W_F = 90_000
 
     aircraftSpecs = {'W_E':106_000, 'W_MP':40_000, 'W_MTO':220_000, 'W_P':W_P, 'W_F':W_F, # Weight specs
                      'maxPass':240, 'MPRange':12_000, 'W_F_MP':74_000, 'SWing':315, # Other aircraft specs
@@ -283,9 +297,11 @@ if __name__ == '__main__':
 
     aircraft = Aircraft(aircraftSpecs)
 
+
+    # L/D against Cl
     # CLs = []
     # LDs = []
-    # MRange = np.arange(0.2,0.85,0.01)
+    # MRange = np.arange(0.6,1,0.01)
     # for M in MRange:
     #     aircraft.updateAllFlightValues(initCruiseAlt, ft=False)
     #     aircraft.speedsOvrd(V=-1, M=M)
@@ -294,36 +310,37 @@ if __name__ == '__main__':
     #     CLs.append(aircraft.Cl)
     #     LDs.append(1/aircraft.beta)
 
-    # print(aircraft.V)
+    # sns.set_palette('dark')
 
     # plt.subplot(1,2,1)
     # plt.plot(CLs, LDs)
+    # plt.xlabel('C_l')
+    # plt.ylabel('L/D')
     # plt.grid()
 
     # plt.subplot(1,2,2)
     # plt.plot(MRange, CLs)
+    # plt.xlabel('Distance travelled, s / km')
+    # plt.ylabel('Fuel burnt / kg')
     # plt.grid()
     # plt.show()
 
-
-
-
+    # Fuel burn against distance travelled
     altitudes = initCruiseAlt * np.ones(10)
 
     distances = []
     fuelBurn = []
-    fuelBurn2 = []
-    
+
     while aircraft.W_F > 0:
-        aircraft.updateAllFlightValues(initCruiseAlt, ft=False, MOvrd=0.85) #0.85)
+        aircraft.updateAllFlightValues(31000, ft=True, MOvrd=-1) #0.85)
         distances.append(aircraft.s/1000)
         fuelBurn.append(aircraft.W_FB)
-        fuelBurn2.append(aircraft.W_FB2)
 
-    plt.plot(distances, fuelBurn)
-    plt.plot(distances, fuelBurn2)
-    plt.scatter(notesSFB, notesFB)
-    plt.yticks(np.arange(0,max(fuelBurn),5000))
+    plt.plot(distances, fuelBurn, label='fuel burn method 1')
+    plt.hlines(W_F, 0, 12000, linestyles='--', color='purple')
+    plt.scatter(notesSFB, notesFB, s=3, color='darkgreen')
+    plt.yticks(np.arange(0,max(fuelBurn) + 5000,5000))
     plt.grid()
+    plt.legend()
     plt.show()
     print('lol')
