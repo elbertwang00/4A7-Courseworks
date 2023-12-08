@@ -70,6 +70,9 @@ class Aircraft:
         self.W_FBTimestep = -1
         self.W_CO2 = 0.0
         self.W_NOX = 0.0
+        self.W_H2O = 0.0
+        self.cumContrailChance = 0.0
+        self.W_H2OContrail = 0.0
         
         # Model parameters
         self.timestep = specs['timestep']
@@ -82,6 +85,11 @@ class Aircraft:
         self.K2 = specs['K2']
 
         self.vRat = specs['vRat'] # EAS ratio (design point)
+
+        self.dontCheckMach = specs['dontCheckMach']
+
+        self.TRHFitParams = [-2.11945474e-05,  1.99228746e-02, -7.02668394e+00,  1.10205996e+03, -6.48519007e+04]
+
 
         self.betaOpt = 2*(self.K1*self.K2)**0.5
 
@@ -104,7 +112,7 @@ class Aircraft:
 
         if self.W_F < 0:
             raise Exception(f'Zero fuel remaining at air distance: {self.s}')
-        if self.M > 0.85:
+        if self.dontCheckMach==False and self.M > 0.85:
             raise Exception(f'Mach number exceeding transonic drag threshold of 0.85')
         
         return
@@ -156,7 +164,7 @@ class Aircraft:
             self.V = V
             self.M = M
         
-        self.EASOpt = (self.W/0.5/self.rho_sl/self.SWing)**0.5 * (self.K2/self.K1)**0.25
+        self.EASOpt = (self.W*9.81/0.5/self.rho_sl/self.SWing)**0.5 * (self.K2/self.K1)**0.25
         self.EAS = self.V * (self.rho/self.rho_sl)**0.5
         self.vRat = self.EAS/self.EASOpt
         return
@@ -233,8 +241,21 @@ class Aircraft:
         # CO2 emissions
         self.W_CO2 += 3088 * self.W_FBTimestep
 
-        # Water vapour - contrails
+        # H2O emissions
+        W_H2OTimestep = 1421 * self.W_FBTimestep
+        self.W_H2O += W_H2OTimestep
 
+        # Water vapour - contrails. Formation occurs at lower humidities with higher altitude and lower temperature. e.g., ~11km formation is certain at any relative humidity
+        TRH = 0.0 # Relative humidity that contrails would form at current temperature
+
+        for i in range(len(self.TRHFitParams)):
+            TRH += self.TRHFitParams[i]*self.T**(len(self.TRHFitParams)-i-1)
+        
+        TRH = min([1, max([0, TRH])]) # Contraining relative humidity to stay within 0 and 1
+        contrailChance = 1-TRH
+
+        self.cumContrailChance += contrailChance
+        self.W_H2OContrail += contrailChance * W_H2OTimestep
         return
     
     #########################################################################################################################################################
@@ -285,14 +306,13 @@ if __name__ == '__main__':
 
     # Analysis variables
     vRat = 1.016 # Ratio of EAS to optimal EAS
-    initCruiseAlt = 9.5
     W_P = 24_000
     W_F = 90_000
 
     aircraftSpecs = {'W_E':106_000, 'W_MP':40_000, 'W_MTO':220_000, 'W_P':W_P, 'W_F':W_F, # Weight specs
                      'maxPass':240, 'MPRange':12_000, 'W_F_MP':74_000, 'SWing':315, # Other aircraft specs
                      'rEgnine':45, 'thetEngine':6, 'effComp':0.9, 'effTurb':0.9, 'FPREngine':1.45, 'effFan':0.92, 'effTransfer':0.9, 'LCVFuel':42.7e6, # Engine
-                     'timestep':timestep, 'k':0.015, 'c1':0.3, 'c2':1.0, 'K1':0.0125, 'K2':0.0446, 'vRat':vRat} # Model parameters
+                     'timestep':timestep, 'k':0.015, 'c1':0.3, 'c2':1.0, 'K1':0.0125, 'K2':0.0446, 'vRat':vRat, 'dontCheckMach':True} # Model parameters
     
 
     aircraft = Aircraft(aircraftSpecs)
@@ -326,13 +346,11 @@ if __name__ == '__main__':
     # plt.show()
 
     # Fuel burn against distance travelled
-    altitudes = initCruiseAlt * np.ones(10)
-
     distances = []
     fuelBurn = []
 
     while aircraft.W_F > 0:
-        aircraft.updateAllFlightValues(31000, ft=True, MOvrd=-1) #0.85)
+        aircraft.updateAllFlightValues(9.5, ft=False, MOvrd=0.8) #0.85)
         distances.append(aircraft.s/1000)
         fuelBurn.append(aircraft.W_FB)
 
