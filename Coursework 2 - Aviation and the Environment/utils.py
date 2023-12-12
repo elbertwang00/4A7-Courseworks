@@ -87,6 +87,7 @@ class Aircraft:
         self.vRat = specs['vRat'] # EAS ratio (design point)
 
         self.dontCheckMach = specs['dontCheckMach']
+        self.dontCheckW_P = specs['dontCheckW_P']
 
         self.TRHFitParams = [-2.11945474e-05,  1.99228746e-02, -7.02668394e+00,  1.10205996e+03, -6.48519007e+04]
 
@@ -106,8 +107,8 @@ class Aircraft:
             assert self.FPREngine >= 1.35
 
             # Weight constraints
-            # assert self.W_F <= self.W_F_MP
-            assert self.W_P <= self.W_MP
+            if self.dontCheckW_P==False:
+                assert self.W_P <= self.W_MP
             assert self.W <= self.W_MTO
 
         if self.W_F < 0:
@@ -234,8 +235,8 @@ class Aircraft:
     
     def pollutionUpdate(self):
         # NOX emissions
-        T03 = 1 + (self.rEngine**(0.4/1.4) - 1)/self.effComp
-        EI_NOX = 0.011445 * np.exp(0.00676593 * T03) * self.T0
+        T03 = (1 + (self.rEngine**(0.4/1.4) - 1)/self.effComp) * self.T0
+        EI_NOX = 0.011445 * np.exp(0.00676593 * T03)
         self.W_NOX += EI_NOX * self.W_FBTimestep * (15.1*2)
 
         # CO2 emissions
@@ -248,8 +249,11 @@ class Aircraft:
         # Water vapour - contrails. Formation occurs at lower humidities with higher altitude and lower temperature. e.g., ~11km formation is certain at any relative humidity
         TRH = 0.0 # Relative humidity that contrails would form at current temperature
 
-        for i in range(len(self.TRHFitParams)):
-            TRH += self.TRHFitParams[i]*self.T**(len(self.TRHFitParams)-i-1)
+        if self.T > 235:
+            TRH = 1.0
+        else:
+            for i in range(len(self.TRHFitParams)):
+                TRH += self.TRHFitParams[i]*self.T**(len(self.TRHFitParams)-i-1)
         
         TRH = min([1, max([0, TRH])]) # Contraining relative humidity to stay within 0 and 1
         contrailChance = 1-TRH
@@ -305,7 +309,7 @@ if __name__ == '__main__':
     timestep = 1 # s
 
     # Analysis variables
-    vRat = 1.016 # Ratio of EAS to optimal EAS
+    vRat = 1 # Ratio of EAS to optimal EAS
     W_P = 24_000
     W_F = 90_000
 
@@ -317,40 +321,12 @@ if __name__ == '__main__':
 
     aircraft = Aircraft(aircraftSpecs)
 
-
-    # L/D against Cl
-    # CLs = []
-    # LDs = []
-    # MRange = np.arange(0.6,1,0.01)
-    # for M in MRange:
-    #     aircraft.updateAllFlightValues(initCruiseAlt, ft=False)
-    #     aircraft.speedsOvrd(V=-1, M=M)
-    #     aircraft.ClUpdate()
-    #     aircraft.DBetaUpdate()
-    #     CLs.append(aircraft.Cl)
-    #     LDs.append(1/aircraft.beta)
-
-    # sns.set_palette('dark')
-
-    # plt.subplot(1,2,1)
-    # plt.plot(CLs, LDs)
-    # plt.xlabel('C_l')
-    # plt.ylabel('L/D')
-    # plt.grid()
-
-    # plt.subplot(1,2,2)
-    # plt.plot(MRange, CLs)
-    # plt.xlabel('Distance travelled, s / km')
-    # plt.ylabel('Fuel burnt / kg')
-    # plt.grid()
-    # plt.show()
-
     # Fuel burn against distance travelled
     distances = []
     fuelBurn = []
 
     while aircraft.W_F > 0:
-        aircraft.updateAllFlightValues(9.5, ft=False, MOvrd=0.8) #0.85)
+        aircraft.updateAllFlightValues(9.5, ft=False, MOvrd=0.85) #0.85)
         distances.append(aircraft.s/1000)
         fuelBurn.append(aircraft.W_FB)
 
