@@ -49,7 +49,7 @@ class Aircraft:
         self.SWing = specs['SWing']
 
         # Engine specs at cruise
-        self.rEngine = specs['rEgnine']
+        self.rEngine = specs['rEngine']
         self.thetEngine = specs['thetEngine']
         self.effComp = specs['effComp']
         self.effTurb = specs['effTurb']
@@ -114,12 +114,13 @@ class Aircraft:
         if self.W_F < 0:
             raise Exception(f'Zero fuel remaining at air distance: {self.s}')
         if self.dontCheckMach==False and self.M > 0.85:
-            raise Exception(f'Mach number exceeding transonic drag threshold of 0.85')
+            self.M = 0.85
+            # raise Exception(f'Mach number exceeding transonic drag threshold of 0.85')
         
         return
     
     #########################################################################################################################################################
-    #                                                                   AIRCRAFT
+    #           AIRFRAME
     #########################################################################################################################################################
 
     def ISACondUpdate(self):
@@ -184,7 +185,7 @@ class Aircraft:
         return
 
     #########################################################################################################################################################
-    #                                                                   ENGINE
+    #           ENGINE
     #########################################################################################################################################################
     
     def stagnationValuesUpdate(self):
@@ -263,7 +264,7 @@ class Aircraft:
         return
     
     #########################################################################################################################################################
-    #                                                                   SIMULATION
+    #           SIMULATION
     #########################################################################################################################################################
 
     def updateAllFlightValues(self, h, ft=True, MOvrd=-1, VOvrd=-1):
@@ -277,10 +278,9 @@ class Aircraft:
         
         self.checkVariables()
 
-        # Aircraft
+        # Airframe
         self.ISACondUpdate()
 
-        # if self.time == 0.0:
         self.sFuelburnUpdate()
 
         if MOvrd!=-1 or VOvrd!=-1:
